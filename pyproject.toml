@@ -1,0 +1,39 @@
+[project]
+name = "verify"
+version = "0.1.0"
+description = "Validation campaign management platform"
+requires-python = ">=3.10"
+dependencies = [
+    "sqlalchemy>=2.0",
+    "click>=8.1",
+    "openpyxl>=3.1",
+    "tabulate>=0.9",
+    "rich>=13.0",
+    "textual>=0.52",
+]
+
+[project.scripts]
+verify = "verify.cli.main:main"
+
+[project.optional-dependencies]
+dev = [
+    "alembic>=1.18",
+    "pytest>=7.4",
+    "pytest-cov>=4.1",
+    "ruff>=0.4",
+]
+
+[tool.setuptools.packages.find]
+include = ["verify", "verify.*"]
+exclude = ["alembic*", "tests*", "examples*", "scripts*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

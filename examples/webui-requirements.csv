@@ -1,0 +1,8 @@
+key,title,description,domain
+UI-001,Login page accessible,Login form must render at /login and accept credentials,webui
+UI-002,Form validation feedback,Invalid inputs must show inline error messages,webui
+UI-003,Responsive layout,Pages must render correctly at 320px 768px and 1280px width,webui
+UI-004,Keyboard navigation,All interactive elements must be reachable via Tab key,webui
+UI-005,Color contrast minimum,Text must meet WCAG AA contrast ratio of 4.5:1,webui
+UI-006,Session timeout warning,Users must see a warning 60s before session expires,webui
+UI-007,CSRF token on forms,All state-changing forms must include a CSRF token,webui

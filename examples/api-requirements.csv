@@ -1,0 +1,10 @@
+key,title,description,domain
+API-001,Rate limiting enforced,API must return 429 after 100 requests/minute per client,api
+API-002,Bearer token auth,Endpoints must reject requests without valid JWT in Authorization header,api
+API-003,JSON error responses,Errors must return RFC 7807 Problem Details format,api
+API-004,Pagination headers,List endpoints must include X-Total-Count and Link headers,api
+API-005,Request validation,Malformed JSON or missing required fields must return 400,api
+API-006,Idempotency support,POST endpoints must support Idempotency-Key header,api
+API-007,CORS headers configured,OPTIONS responses must include allowed origins,api
+API-008,Request ID propagation,All responses must include X-Request-Id header,api
+API-009,Response time SLA,95th percentile response time must be under 200ms,api

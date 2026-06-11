@@ -1,0 +1,9 @@
+key,title,description,domain
+K8S-001,Pod must run as non-root,All containers must have securityContext.runAsNonRoot=true,kubernetes
+K8S-002,No privileged containers,Containers must not use privileged mode or host namespace,kubernetes
+K8S-003,Resource limits required,Every container must define CPU and memory limits,kubernetes
+K8S-004,Read-only root filesystem,Containers must mount root filesystem as read-only,kubernetes
+K8S-005,NetworkPolicy enforced,Namespaces must have a default-deny NetworkPolicy,kubernetes
+K8S-006,Liveness probe present,Every pod must define a livenessProbe,kubernetes
+K8S-007,Image from trusted registry,Images must come from internal registry only,kubernetes
+K8S-008,No hostPath volumes,Pods must not use hostPath volumes,kubernetes
