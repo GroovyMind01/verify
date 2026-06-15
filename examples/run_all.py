@@ -42,113 +42,78 @@ all_reqs = req_svc.list_all()
 print(f"\nTotal requirements: {len(all_reqs)}")
 
 print("\n" + "=" * 60)
-print("Phase 2 — Create test definitions")
+print("Phase 2 — Create executable test definitions")
 print("=" * 60)
 
+K8S_DIR = os.path.join(EXAMPLES_DIR, "kubernetes")
+WEBUI_DIR = os.path.join(EXAMPLES_DIR, "webui")
+API_DIR = os.path.join(EXAMPLES_DIR, "api")
+
 definitions = [
-    # Kubernetes tests
+    # ── Kubernetes tests ──
     def_svc.create(
-        name="Run Kyverno policy scan",
-        steps=["kyverno apply policies/ --cluster"],
+        name="Pod security (runAsNonRoot)",
+        description="Scan pods for runAsNonRoot securityContext compliance",
+        steps=["Run: python3 examples/kubernetes/test_pod_security.py"],
         domain="kubernetes",
-        tags=["automated"],
+        tags=["automated", "security"],
+        exec_command=f"python3 {os.path.join(K8S_DIR, 'test_pod_security.py')}",
     ),
     def_svc.create(
-        name="Check pod security contexts",
-        steps=["kubectl get pods -A -o json | jq '.items[].spec.containers[].securityContext'"],
+        name="Resource limits check",
+        description="Verify every container defines CPU and memory limits",
+        steps=["Run: python3 examples/kubernetes/test_resource_limits.py"],
         domain="kubernetes",
-        tags=["manual", "security"],
+        tags=["automated", "resources"],
+        exec_command=f"python3 {os.path.join(K8S_DIR, 'test_resource_limits.py')}",
     ),
     def_svc.create(
-        name="Verify resource quotas",
-        steps=["kubectl get resourcequota -A"],
-        domain="kubernetes",
-        tags=["automated"],
-    ),
-    def_svc.create(
-        name="Audit network policies",
-        steps=["kubectl get netpol -A"],
+        name="NetworkPolicy audit",
+        description="Check that every namespace has a NetworkPolicy",
+        steps=["Run: python3 examples/kubernetes/test_network_policy.py"],
         domain="kubernetes",
         tags=["automated", "networking"],
+        exec_command=f"python3 {os.path.join(K8S_DIR, 'test_network_policy.py')}",
     ),
+    # ── WebUI tests ──
     def_svc.create(
-        name="Verify image registries",
-        steps=["kubectl get pods -A -o json | jq -r '.items[].spec.containers[].image'"],
-        domain="kubernetes",
-        tags=["automated", "supply-chain"],
-    ),
-    # WebUI tests
-    def_svc.create(
-        name="Login page smoke test",
-        steps=["Navigate to /login", "Enter credentials", "Verify redirect to dashboard"],
+        name="Login page audit",
+        description="Check login page for form, CSRF token, password field",
+        steps=["Run: python3 examples/webui/test_login_page.py"],
         domain="webui",
-        tags=["smoke", "authentication"],
+        tags=["smoke", "security"],
+        exec_command=f"python3 {os.path.join(WEBUI_DIR, 'test_login_page.py')}",
     ),
     def_svc.create(
-        name="Form field validation",
-        steps=["Submit empty form", "Verify inline error messages"],
+        name="Page quality check",
+        description="Check HTML for title, charset, alt attributes, deprecated tags",
+        steps=["Run: python3 examples/webui/test_page_quality.py"],
         domain="webui",
-        tags=["forms", "validation"],
+        tags=["a11y", "quality"],
+        exec_command=f"python3 {os.path.join(WEBUI_DIR, 'test_page_quality.py')}",
     ),
+    # ── API tests ──
     def_svc.create(
-        name="Accessibility audit",
-        steps=["Run axe-core against all pages"],
-        domain="webui",
-        tags=["a11y", "automated"],
-    ),
-    def_svc.create(
-        name="Responsive breakpoints check",
-        steps=["Viewport 320px", "Viewport 768px", "Viewport 1280px"],
-        domain="webui",
-        tags=["layout"],
-    ),
-    def_svc.create(
-        name="Session timeout behavior",
-        steps=["Wait for session to approach expiry", "Verify warning modal"],
-        domain="webui",
-        tags=["session", "security"],
-    ),
-    # API tests
-    def_svc.create(
-        name="Authentication required",
-        steps=["GET /api/v1/users without Authorization → 401", "GET with valid JWT → 200"],
+        name="Auth endpoint check",
+        description="Verify API rejects unauthenticated requests with 401",
+        steps=["Run: python3 examples/api/test_auth.py"],
         domain="api",
         tags=["auth", "security"],
+        exec_command=f"python3 {os.path.join(API_DIR, 'test_auth.py')}",
     ),
     def_svc.create(
-        name="Rate limiting behavior",
-        steps=["Send 100 requests in 60s", "Verify 101st returns 429"],
-        domain="api",
-        tags=["rate-limit"],
-    ),
-    def_svc.create(
-        name="Error response format",
-        steps=["Send bad request", "Verify RFC 7807 Problem Details format"],
+        name="Error format check",
+        description="Verify API errors follow RFC 7807 Problem Details",
+        steps=["Run: python3 examples/api/test_error_format.py"],
         domain="api",
         tags=["errors", "contract"],
-    ),
-    def_svc.create(
-        name="Response time benchmark",
-        steps=["Run 500 requests over 30s", "Verify p95 < 200ms"],
-        domain="api",
-        tags=["performance"],
-    ),
-    def_svc.create(
-        name="Pagination headers",
-        steps=["GET /api/v1/users?page=1", "Verify X-Total-Count and Link headers"],
-        domain="api",
-        tags=["pagination"],
-    ),
-    def_svc.create(
-        name="CORS headers",
-        steps=["OPTIONS with Origin header", "Verify CORS response headers"],
-        domain="api",
-        tags=["cors", "security"],
+        exec_command=f"python3 {os.path.join(API_DIR, 'test_error_format.py')}",
     ),
 ]
 
 for td in definitions:
-    print(f"  [{td.domain:12s}] {td.name}")
+    cmd_note = " [exec]" if td.exec_command else ""
+    print(f"  [{td.domain:12s}] {td.name}{cmd_note}")
 
 print(f"\nTotal test definitions: {len(definitions)}")
 
@@ -157,25 +122,17 @@ print("Phase 3 — Map tests to requirements")
 print("=" * 60)
 
 mappings = {
-    "K8S-001": ["Run Kyverno policy scan", "Check pod security contexts"],
-    "K8S-002": ["Run Kyverno policy scan", "Check pod security contexts"],
-    "K8S-003": ["Verify resource quotas"],
-    "K8S-005": ["Audit network policies"],
-    "K8S-007": ["Verify image registries"],
-    "UI-001": ["Login page smoke test"],
-    "UI-002": ["Form field validation"],
-    "UI-003": ["Responsive breakpoints check"],
-    "UI-004": ["Accessibility audit"],
-    "UI-005": ["Accessibility audit"],
-    "UI-006": ["Session timeout behavior"],
-    "UI-007": ["Form field validation"],
-    "API-001": ["Rate limiting behavior"],
-    "API-002": ["Authentication required"],
-    "API-003": ["Error response format"],
-    "API-004": ["Pagination headers"],
-    "API-005": ["Error response format"],
-    "API-007": ["CORS headers"],
-    "API-009": ["Response time benchmark"],
+    "K8S-001": ["Pod security (runAsNonRoot)"],
+    "K8S-002": ["Pod security (runAsNonRoot)"],
+    "K8S-003": ["Resource limits check"],
+    "K8S-005": ["NetworkPolicy audit"],
+    "UI-001": ["Login page audit", "Page quality check"],
+    "UI-004": ["Page quality check"],
+    "UI-005": ["Page quality check"],
+    "UI-007": ["Login page audit"],
+    "API-002": ["Auth endpoint check"],
+    "API-003": ["Error format check"],
+    "API-005": ["Error format check"],
 }
 
 td_by_name = {td.name: td for td in definitions}
@@ -207,38 +164,21 @@ print(f"  Version:   v{version.version_number} ({version.id})")
 print(f"  Test runs: {len(runs)}")
 
 print("\n" + "=" * 60)
-print("Phase 5 — Simulate test execution")
+print("Phase 5 — Execute all test scripts")
 print("=" * 60)
 
-results = [
-    ("Run Kyverno policy scan", "passed", "All policies compliant"),
-    ("Check pod security contexts", "passed", None),
-    ("Verify resource quotas", "failed", "3 deployments missing limits"),
-    ("Audit network policies", "passed", None),
-    ("Verify image registries", "failed", "nginx:latest from Docker Hub"),
-    ("Login page smoke test", "passed", None),
-    ("Form field validation", "passed", None),
-    ("Accessibility audit", "failed", "2 contrast violations on /settings"),
-    ("Responsive breakpoints check", "passed", None),
-    ("Session timeout behavior", "passed", "Warning appears at T-60s"),
-    ("Authentication required", "passed", None),
-    ("Rate limiting behavior", "passed", "429 returned at 101 requests"),
-    ("Error response format", "passed", None),
-    ("Response time benchmark", "passed", "p95=142ms"),
-    ("Pagination headers", "passed", None),
-    ("CORS headers", "failed", "Missing Access-Control-Allow-Methods on /users"),
-]
+results = camp_svc.run_all(version.id)
 
-for tr in runs:
-    td_name = tr.test_definition.name
-    match = [r for r in results if r[0] == td_name]
-    if match:
-        _, status, notes = match[0]
-        camp_svc.update_test_run_status(tr.id, status, notes)
-        status_display = f"[{'PASS' if status == 'passed' else 'FAIL'}]"
-        print(f"  {status_display} {td_name}")
-        if notes:
-            print(f"         → {notes}")
+for tr in results:
+    status_display = (
+        "[PASS]" if tr.status == "passed"
+        else "[FAIL]" if tr.status == "failed"
+        else f"[{tr.status.upper()}]"
+    )
+    td_name = tr.test_definition.name if tr.test_definition else "?"
+    print(f"  {status_display} {td_name}")
+    if tr.notes:
+        print(f"         {tr.notes}")
 
 print("\n" + "=" * 60)
 print("Phase 6 — Coverage report")
