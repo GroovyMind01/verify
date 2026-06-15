@@ -76,6 +76,30 @@ class CampaignService(Protocol):
         """List campaigns marked as templates."""
         ...
 
+    def run_test(self, test_run_id: str, command_override: str | None = None) -> TestRun:
+        """Execute a test run's attached command, capture output as evidence,
+        and set status based on exit code. Use command_override to replace the
+        command defined on the test definition at runtime."""
+        ...
+
+    def exec_test(
+        self,
+        test_id: str,
+        command: str | None = None,
+        campaign_name: str | None = None,
+    ) -> TestRun:
+        """Execute a test definition ad-hoc — creates a minimal campaign,
+        version, and test run on the fly, runs the command, and returns
+        the result with full output stored in tr.output."""
+        ...
+
+    def run_all(
+        self, campaign_version_id: str, command_overrides: dict[str, str] | None = None
+    ) -> list[TestRun]:
+        """Execute all pending test runs in a campaign version.
+        command_overrides maps test_run_id → command to override."""
+        ...
+
 
 class CampaignServiceImpl:
     """Concrete implementation of CampaignService."""
@@ -419,3 +443,212 @@ class CampaignServiceImpl:
             for r in results:
                 session.expunge(r)
             return results
+
+    def run_test(
+        self, test_run_id: str, command_override: str | None = None
+    ) -> TestRun:
+        import subprocess
+        from datetime import datetime, timezone
+
+        from verify.evidence.models import Evidence
+        from verify.shared.security import sanitize_filename
+
+        with self._session_factory() as session:
+            tr = session.execute(
+                select(TestRun)
+                .where(TestRun.id == test_run_id)
+                .options(selectinload(TestRun.test_definition))
+            ).scalar_one_or_none()
+            if tr is None:
+                raise NotFoundError(f"TestRun with id '{test_run_id}' not found")
+
+            command = command_override
+            if not command:
+                command = tr.test_definition.exec_command if tr.test_definition else None
+            if not command:
+                raise ValidationError(
+                    f"Test definition '{tr.test_definition.name if tr.test_definition else '?'}' "
+                    "has no exec_command set. Use verify test set-exec <test-id> '<command>' "
+                    "or pass --exec at runtime."
+                )
+
+            now = datetime.now(timezone.utc)
+            tr.status = "running"
+            tr.started_at = now
+            session.flush()
+
+            try:
+                result = subprocess.run(
+                    command,
+                    shell=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=600,
+                    cwd=None,
+                )
+            except subprocess.TimeoutExpired:
+                result = None
+                tr.status = "error"
+                tr.notes = "Command timed out after 600s"
+            except Exception as e:
+                result = None
+                tr.status = "error"
+                tr.notes = f"Command execution error: {e}"
+
+            if result is not None:
+                tr.status = "passed" if result.returncode == 0 else "failed"
+                tr.notes = f"Exit code: {result.returncode}"
+                # Store full output — stderr first (diagnostics), then stdout
+                full_output = ""
+                if result.stderr:
+                    full_output += result.stderr
+                if result.stdout:
+                    if full_output:
+                        full_output += "\n"
+                    full_output += result.stdout
+                tr.output = full_output
+
+            tr.completed_at = datetime.now(timezone.utc)
+
+            # Record evidence
+            output = ""
+            if result:
+                output = (
+                    f"=== STDOUT ===\n{result.stdout}\n"
+                    f"=== STDERR ===\n{result.stderr}\n"
+                    f"=== RETURN CODE: {result.returncode} ==="
+                )
+            else:
+                output = tr.notes or ""
+
+            safe_name = sanitize_filename(
+                tr.test_definition.name if tr.test_definition else "test"
+            )[:64]
+
+            evidence = Evidence(
+                test_run_id=test_run_id,
+                evidence_type="command_output",
+                file_path="",
+                mime_type="text/plain",
+                metadata_={
+                    "exec_command": command,
+                    "return_code": result.returncode if result else -1,
+                    "sha256": "",
+                },
+            )
+            session.add(evidence)
+            session.flush()
+
+            from verify.shared.database import get_evidence_dir
+            from verify.shared.security import compute_sha256, ensure_safe_directory
+
+            evidence_dir = get_evidence_dir()
+            dest_dir = evidence_dir / test_run_id
+            ensure_safe_directory(dest_dir)
+            dest_name = f"{evidence.id}_{safe_name}.txt"
+            dest_path = dest_dir / dest_name
+
+            with open(dest_path, "w") as f:
+                f.write(output)
+
+            evidence.file_path = str(dest_path)
+            checksum = compute_sha256(dest_path)
+            evidence.checksum = checksum
+            evidence.metadata_ = (evidence.metadata_ or {}) | {"sha256": checksum}
+
+            session.commit()
+            session.expunge(tr)
+            return tr
+
+    def run_all(
+        self, campaign_version_id: str, command_overrides: dict[str, str] | None = None
+    ) -> list[TestRun]:
+        overrides = command_overrides or {}
+        with self._session_factory() as session:
+            version = session.execute(
+                select(CampaignVersion)
+                .where(CampaignVersion.id == campaign_version_id)
+            ).scalar_one_or_none()
+            if version is None:
+                raise NotFoundError(
+                    f"CampaignVersion with id '{campaign_version_id}' not found"
+                )
+
+            run_ids = session.execute(
+                select(TestRun.id).where(
+                    TestRun.campaign_version_id == campaign_version_id,
+                    TestRun.status == "pending",
+                )
+            ).scalars().all()
+
+        results = []
+        for rid in run_ids:
+            result = self.run_test(rid, command_override=overrides.get(rid))
+            results.append(result)
+
+        return results
+
+    def exec_test(
+        self,
+        test_id: str,
+        command: str | None = None,
+        campaign_name: str | None = None,
+    ) -> TestRun:
+        """Ad-hoc execution: create a minimal campaign, version, and test run on the fly,
+        execute the test, and return the result. No prior setup needed.
+
+        - test_id: UUID of a TestDefinition (must have exec_command or pass `command`)
+        - command: override the command (optional). If omitted, uses test definition's exec_command.
+        - campaign_name: label for the auto-created campaign (default: "Ad-hoc")
+        """
+        name = campaign_name or "Ad-hoc"
+
+        with self._session_factory() as session:
+            td = session.execute(
+                select(TestDefinition).where(TestDefinition.id == test_id)
+            ).scalar_one_or_none()
+            if td is None:
+                raise NotFoundError(f"TestDefinition with id '{test_id}' not found")
+
+            cmd = command or td.exec_command
+            if not cmd:
+                raise ValidationError(
+                    f"Test '{td.name}' has no exec_command set. "
+                    "Pass --exec '<command>' or use verify test set-exec."
+                )
+
+            # Reuse or create the ad-hoc campaign
+            campaign = session.execute(
+                select(Campaign).where(Campaign.name == name).limit(1)
+            ).scalars().first()
+            if campaign is None:
+                campaign = Campaign(name=name, description="Auto-created for ad-hoc runs")
+                session.add(campaign)
+                session.flush()
+
+            max_vn = session.execute(
+                select(func.max(CampaignVersion.version_number)).where(
+                    CampaignVersion.campaign_id == campaign.id
+                )
+            ).scalar()
+            next_version = (max_vn or 0) + 1
+
+            version = CampaignVersion(
+                campaign_id=campaign.id,
+                version_number=next_version,
+                notes=f"Auto-created for test: {td.name}",
+            )
+            session.add(version)
+            session.flush()
+
+            tr = TestRun(
+                campaign_version_id=version.id,
+                test_definition_id=test_id,
+            )
+            session.add(tr)
+            session.flush()
+            session.commit()
+            # Run it in separate session to get the full result
+            session.expunge(tr)
+
+        return self.run_test(tr.id, command_override=cmd)
