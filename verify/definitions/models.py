@@ -19,6 +19,7 @@ class TestDefinition(Base, UUIDMixin):
     name: Mapped[str] = mapped_column(String(256), nullable=False)
     description: Mapped[str | None] = mapped_column(Text)
     steps: Mapped[list[str] | dict[str, Any] | None] = mapped_column(JSON)
+    exec_command: Mapped[str | None] = mapped_column(Text)
     expected_result: Mapped[str | None] = mapped_column(Text)
     domain: Mapped[str] = mapped_column(String(64), nullable=False, default="general")
     tags: Mapped[list[str] | None] = mapped_column(JSON)

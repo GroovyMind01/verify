@@ -21,7 +21,12 @@ class DefinitionService(Protocol):
         expected_result: str | None = None,
         domain: str = "general",
         tags: list[str] | None = None,
+        exec_command: str | None = None,
     ) -> TestDefinition:
+        ...
+
+    def set_exec_command(self, test_id: str, command: str) -> TestDefinition:
+        """Attach a shell command to an existing test definition."""
         ...
 
     def list_all(self, domain: str | None = None) -> list[TestDefinition]:
@@ -59,6 +64,7 @@ class DefinitionServiceImpl:
         expected_result: str | None = None,
         domain: str = "general",
         tags: list[str] | None = None,
+        exec_command: str | None = None,
     ) -> TestDefinition:
         with self._session_factory() as session:
             td = TestDefinition(
@@ -68,6 +74,7 @@ class DefinitionServiceImpl:
                 expected_result=expected_result,
                 domain=domain,
                 tags=tags,
+                exec_command=exec_command,
             )
             session.add(td)
             session.commit()
@@ -152,3 +159,15 @@ class DefinitionServiceImpl:
             for r in results:
                 session.expunge(r)
             return results
+
+    def set_exec_command(self, test_id: str, command: str) -> TestDefinition:
+        with self._session_factory() as session:
+            td = session.execute(
+                select(TestDefinition).where(TestDefinition.id == test_id)
+            ).scalar_one_or_none()
+            if td is None:
+                raise NotFoundError(f"TestDefinition with id '{test_id}' not found")
+            td.exec_command = command
+            session.commit()
+            session.expunge(td)
+            return td
