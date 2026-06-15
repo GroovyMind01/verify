@@ -1,6 +1,7 @@
 """Requirement service — import, query, version management."""
 
 import csv
+from pathlib import Path
 from typing import Protocol
 
 from sqlalchemy import select, text
@@ -366,6 +367,8 @@ class RequirementServiceImpl:
             }
 
     def export_markdown(self, output_path: str) -> None:
+        from verify.shared.security import set_safe_permissions
+
         requirements = self.list_all()
         with open(output_path, "w") as f:
             f.write("# Requirements\n\n")
@@ -377,6 +380,7 @@ class RequirementServiceImpl:
                 if req.description:
                     f.write(f"{req.description}\n\n")
                 f.write("---\n\n")
+        set_safe_permissions(Path(output_path))
 
     def archive(self, key: str) -> Requirement:
         with self._session_factory() as session:

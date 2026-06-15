@@ -90,20 +90,21 @@ def is_symlink(path: Path) -> bool:
 def secure_copy(source: Path, dest: Path) -> None:
     """Copy a file without following symlinks at the source.
 
+    Uses O_NOFOLLOW to atomically reject symlinks at open time,
+    closing the TOCTOU window between the is_symlink() check and
+    the file descriptor acquisition.
+
     Raises ValidationError-like ValueError if source is a symlink.
     """
-    if is_symlink(source):
-        raise ValueError(f"Refusing to copy symlink: {source}")
+    try:
+        src_fd = os.open(source, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError as e:
+        raise ValueError(f"Cannot open source (symlink or missing): {source}: {e}")
 
-    if not source.is_file():
-        raise ValueError(f"Source is not a regular file: {source}")
+    with os.fdopen(src_fd, "rb") as src:
+        with open(dest, "wb") as dst:
+            shutil.copyfileobj(src, dst)
 
-    # Use low-level open to avoid following symlinks
-    with open(source, "rb") as src_fd:
-        with open(dest, "wb") as dst_fd:
-            shutil.copyfileobj(src_fd, dst_fd)
-
-    # Copy metadata but don't follow symlinks
     shutil.copystat(source, dest, follow_symlinks=False)
     set_safe_permissions(dest)
 
@@ -157,6 +158,23 @@ def validate_string(
     if "\x00" in value:
         raise ValueError(f"{field_name} contains null bytes")
     return value
+
+
+def validate_command(command: str | None, field_name: str = "command") -> str:
+    """Validate a shell command string before execution.
+
+    Rejects empty commands, null bytes, and extremely long commands.
+    Keeps shell=True support since test scripts require pipes, redirects, etc.
+    """
+    if not command:
+        raise ValueError(f"{field_name} must not be empty")
+    if not isinstance(command, str):
+        raise ValueError(f"{field_name} must be a string")
+    if len(command) > 4096:
+        raise ValueError(f"{field_name} exceeds maximum length of 4096")
+    if "\x00" in command:
+        raise ValueError(f"{field_name} contains null bytes")
+    return command.strip()
 
 
 def validate_id(value: str, field_name: str) -> str:

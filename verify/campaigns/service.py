@@ -451,7 +451,7 @@ class CampaignServiceImpl:
         from datetime import datetime, timezone
 
         from verify.evidence.models import Evidence
-        from verify.shared.security import sanitize_filename
+        from verify.shared.security import sanitize_filename, validate_command
 
         with self._session_factory() as session:
             tr = session.execute(
@@ -476,6 +476,12 @@ class CampaignServiceImpl:
             tr.status = "running"
             tr.started_at = now
             session.flush()
+
+            # Validate before executing
+            try:
+                command = validate_command(command)
+            except ValueError as e:
+                raise ValidationError(str(e))
 
             try:
                 result = subprocess.run(
@@ -540,7 +546,11 @@ class CampaignServiceImpl:
             session.flush()
 
             from verify.shared.database import get_evidence_dir
-            from verify.shared.security import compute_sha256, ensure_safe_directory
+            from verify.shared.security import (
+                compute_sha256,
+                ensure_safe_directory,
+                set_safe_permissions,
+            )
 
             evidence_dir = get_evidence_dir()
             dest_dir = evidence_dir / test_run_id
@@ -550,6 +560,8 @@ class CampaignServiceImpl:
 
             with open(dest_path, "w") as f:
                 f.write(output)
+
+            set_safe_permissions(dest_path)
 
             evidence.file_path = str(dest_path)
             checksum = compute_sha256(dest_path)

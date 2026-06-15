@@ -2,6 +2,7 @@
 
 
 import json
+from pathlib import Path
 from typing import Protocol
 
 from sqlalchemy import select
@@ -124,9 +125,12 @@ class ReportingServiceImpl:
             }
 
     def export_json(self, campaign_version_id: str, output_path: str) -> None:
+        from verify.shared.security import set_safe_permissions
+
         summary = self.build_summary(campaign_version_id)
         with open(output_path, "w") as f:
             json.dump(summary, f, indent=2, default=str)
+        set_safe_permissions(Path(output_path))
 
     def export_text(self, campaign_version_id: str) -> str:
         from tabulate import tabulate
@@ -162,10 +166,13 @@ class ReportingServiceImpl:
         return "\n".join(lines)
 
     def export_html(self, campaign_version_id: str, output_path: str) -> None:
+        from verify.shared.security import set_safe_permissions
+
         summary = self.build_summary(campaign_version_id)
         html = _build_html_report(summary)
         with open(output_path, "w") as f:
             f.write(html)
+        set_safe_permissions(Path(output_path))
 
 
 def _build_html_report(summary: dict) -> str:
