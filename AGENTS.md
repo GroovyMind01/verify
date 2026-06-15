@@ -117,6 +117,30 @@ The full-text search index is a separate virtual table (`requirements_fts`). It'
 
 Query escaping: FTS5 interprets special chars (`-`, `*`, `(`, `)`) as operators. The `search()` method wraps each term in double quotes to treat them as literals.
 
+## Test execution model
+
+Tests are executable — each `TestDefinition` can carry an `exec_command` (shell command). Execution is handled by `CampaignServiceImpl.run_test()`:
+
+```
+User writes script (Python, bash, binary)
+    ↓ prints to stdout/stderr, exits with code
+verify test exec <id>    ← ad-hoc, auto-creates campaign
+verify campaign run <id>  ← batch, runs all pending
+    ↓
+CampaignServiceImpl.run_test()
+    1. subprocess.run(command, shell=True, capture_output=True)
+    2. stores full output in test_run.output
+    3. creates Evidence record with SHA-256 checksum
+    4. writes evidence file to <VERIFY_HOME>/evidence/<run-id>/
+    5. sets test_run.status: exit 0→passed, non-zero→failed, timeout→error
+    ↓
+Result displayed + evidence auto-collected
+```
+
+**Evidence is automatic** — stdout/stderr capture, SHA-256 checksums, and file storage are all handled by `run_test()`. The user's test script only needs to print output and exit with the right code. Extra artifacts (screenshots, logs) must be collected manually with `verify evidence collect`.
+
+**Ad-hoc execution** (`exec_test()`) auto-creates an "Ad-hoc" campaign + version + test run on the fly. No prior setup needed. The user can also override the command at runtime via `--exec`.
+
 ## Testing
 
 - In-memory SQLite: `create_engine("sqlite://")` — note `sqlite://`, NOT `sqlite+pysqlite:///`

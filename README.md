@@ -36,6 +36,121 @@ verify campaign status <version-id>
 verify req search "privileged"
 ```
 
+## The full workflow
+
+Verify follows a simple 5-step lifecycle. **Evidence, status tracking, and output capture are all automatic** — your test script only needs to print results and exit with the right code.
+
+```
+┌──────────────┐    ┌──────────────┐    ┌──────────────┐    ┌──────────────┐    ┌──────────────┐
+│ 1. IMPORT    │    │ 2. DEFINE    │    │ 3. EXECUTE   │    │ 4. INSPECT   │    │ 5. REPORT    │
+│ requirements │───▶│ executable   │───▶│ tests        │───▶│ evidence +   │───▶│ campaign     │
+│ from CSV     │    │ tests        │    │ (ad-hoc or   │    │ status       │    │ results      │
+│              │    │              │    │  campaign)   │    │              │    │              │
+└──────────────┘    └──────────────┘    └──────────────┘    └──────────────┘    └──────────────┘
+```
+
+### Step 1 — Import requirements
+
+```bash
+verify req import examples/kubernetes-requirements.csv
+```
+
+Load your specification into Verify. Each row becomes a requirement with a unique key, domain, and description. Re-import is idempotent (duplicates are skipped). Use `--update` to refresh existing rows.
+
+### Step 2 — Define executable tests
+
+```bash
+verify test create --name "Pod Security Check" --domain kubernetes \
+  --exec 'python3 examples/kubernetes/test_pod_security.py'
+```
+
+Link the test to the requirement it validates:
+
+```bash
+verify test map <test-id> K8S-001
+```
+
+**What makes a test executable:** any script or binary that:
+- Prints diagnostic output to stdout/stderr
+- Exits with code 0 (pass) or non-zero (fail)
+
+You write the test in whatever language you want — Python, bash, Go, a compiled binary. Verify handles everything else automatically.
+
+### Step 3 — Execute
+
+**Option A: Ad-hoc (no setup needed)**
+
+```bash
+verify test exec <test-id>
+verify test exec <test-id> --exec './my_script.sh --env staging'   # override command
+```
+
+`verify test exec` runs a single test immediately. It auto-creates a minimal campaign behind the scenes — you don't need to set up anything. Perfect for the "write → run → fix → re-run" development loop.
+
+**Option B: Campaign (batch run)**
+
+```bash
+verify campaign create "Q3 Audit"
+verify campaign version <campaign-id> -t <test-id-1> -t <test-id-2>
+verify campaign run <version-id>                    # runs all pending tests
+verify campaign run <version-id> --verbose          # shows per-test output
+```
+
+Use campaigns when you want to group multiple tests, run them together, track pass rates over time, and generate reports.
+
+**What happens automatically when a test runs:**
+1. The command is executed via subprocess
+2. stdout + stderr are captured
+3. An evidence file is created at `<VERIFY_HOME>/evidence/<test-run-id>/<uuid>_<name>.txt`
+4. A SHA-256 checksum is computed and stored
+5. Test run status is set: exit 0 → `passed`, non-zero → `failed`, timeout → `error`
+6. The full output is stored in the database for instant display
+
+**You never write evidence-collection code in your test scripts.** Just `print()` and `sys.exit()`.
+
+### Step 4 — Inspect results
+
+```bash
+# Per-test output
+verify test run <test-run-id>                    # run + see output
+verify test exec <test-id>                       # run + see output
+
+# Campaign-level status
+verify campaign status <version-id>              # pass/fail counts
+verify evidence list --campaign-version <vid>    # all evidence files
+verify evidence preview <evidence-id>            # view a specific output
+
+# Coverage — which tests cover which requirements
+verify req coverage REQ-001
+```
+
+### Step 5 — Report
+
+```bash
+verify campaign report <version-id>                # text table
+verify campaign report <version-id> --format json -o report.json
+verify campaign report <version-id> --format html -o report.html
+```
+
+### Evidence model — what you need to know
+
+| What | Who manages it | Where |
+|------|---------------|-------|
+| stdout/stderr from test execution | **Automatic** — captured by Verify | DB (`test_runs.output`) + evidence file |
+| SHA-256 checksum | **Automatic** — computed on capture | DB (`evidence.checksum`) + metadata JSON |
+| Test run status (passed/failed) | **Automatic** — set from exit code | DB (`test_runs.status`) |
+| Extra artifacts (screenshots, logs, PDFs) | **You** — `verify evidence collect` | `<VERIFY_HOME>/evidence/<run-id>/` |
+
+The only manual evidence step: if your test script produces files (a screenshot, a log file, a PDF report), attach them with:
+
+```bash
+verify evidence collect <test-run-id> ./screenshot.png --type screenshot
+```
+
+## Data directory
+
+Default `~/.local/share/verify/` (override with `VERIFY_HOME`):
+
 **Data directory** — default `~/.local/share/verify/` (override with `VERIFY_HOME`):
 ```
 ~/.local/share/verify/
@@ -117,8 +232,62 @@ verify test show <test-id>
 # Map to requirement
 verify test map <test-id> REQ-001 --claim full
 
+# Attach a shell command to an existing test
+verify test set-exec <test-id> 'python3 -m pytest tests/test_auth.py -v'
+
 # Import from CSV
 verify test import tests.csv
+
+# Run a single test (executes attached command, captures output as evidence)
+verify test run <test-run-id>
+```
+
+### Executable tests
+
+Test definitions can carry a shell command (`exec_command`). When you run the test, the command is executed, stdout/stderr is captured as evidence, and the test run status is set automatically (`passed` for exit code 0, `failed` otherwise).
+
+**Creating an executable test:**
+
+```bash
+# With --exec at creation time
+verify test create --name "Auth Tests" --domain api \
+  --exec 'python3 -m pytest tests/test_auth.py -v'
+
+# Or attach a command to an existing test
+verify test set-exec <test-id> 'curl -sf https://api.example.com/health'
+```
+
+**Running tests:**
+
+```bash
+# Run a single test run
+verify test run <test-run-id>
+
+# Run ALL pending tests in a campaign version
+verify campaign run <version-id>
+```
+
+The output is automatically stored as evidence (type `command_output`) with SHA-256 checksums.
+
+**Custom test scripts** — any executable works: Python scripts, shell scripts, compiled binaries. The exit code determines pass/fail.
+
+```bash
+# Create a custom test script
+cat > /tmp/check_pods.sh << 'EOF'
+#!/bin/bash
+non_root=$(kubectl get pods -A -o json | jq '[.items[].spec.containers[] | select(.securityContext.runAsNonRoot != true)] | length')
+if [ "$non_root" -gt 0 ]; then
+    echo "FAIL: $non_root pods running as root"
+    exit 1
+fi
+echo "OK: all pods run as non-root"
+exit 0
+EOF
+chmod +x /tmp/check_pods.sh
+
+# Attach and run
+verify test set-exec <test-id> '/tmp/check_pods.sh'
+verify test run <test-run-id>
 ```
 
 ### Campaigns
@@ -138,6 +307,9 @@ verify campaign version <campaign-id> -t <test-id-1> -t <test-id-2> --notes "Fir
 
 # Check status
 verify campaign status <version-id>
+
+# Execute all pending tests in a version
+verify campaign run <version-id>
 
 # Generate report (text, json, html)
 verify campaign report <version-id>
