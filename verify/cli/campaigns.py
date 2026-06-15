@@ -236,3 +236,36 @@ def set_milestone(ctx, version_id, milestone):
     except NotFoundError as e:
         click.echo(f"Error: {e}", err=True)
         raise SystemExit(2)
+
+
+@campaign_group.command("run")
+@click.argument("campaign_version_id")
+@click.option("--verbose", "-v", is_flag=True, help="Show per-test output during execution")
+@click.pass_context
+def run_campaign(ctx, campaign_version_id, verbose):
+    """Execute all pending test runs in a campaign version."""
+    service = _get_campaign_service(ctx)
+    try:
+        results = service.run_all(campaign_version_id)
+    except NotFoundError as e:
+        click.echo(f"Error: {e}", err=True)
+        raise SystemExit(2)
+
+    if not results:
+        click.echo("No pending test runs to execute.")
+        return
+
+    passed = sum(1 for tr in results if tr.status == "passed")
+    failed = sum(1 for tr in results if tr.status == "failed")
+    errors = sum(1 for tr in results if tr.status == "error")
+
+    for tr in results:
+        td_name = tr.test_definition.name if tr.test_definition else "?"
+        icon = {"passed": "\u2705", "failed": "\u274c", "error": "\u26a0\ufe0f"}.get(tr.status, "?")
+        click.echo(f"  {icon} {td_name}")
+        if verbose and tr.output:
+            for line in tr.output.split("\n")[-20:]:  # last 20 lines
+                click.echo(f"       {line}")
+
+    click.echo()
+    click.echo(f"Ran {len(results)} test(s): {passed} passed, {failed} failed, {errors} error(s)")
